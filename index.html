@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Cartoon Shooter Game</title>
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: #222;
+      font-family: sans-serif;
+      color: white;
+    }
+    canvas {
+      display: block;
+      background: #333;
+    }
+
+    
+    #hud {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      z-index: 10;
+    }
+
+    #mobile-controls {
+  display: none; /* Show only on small screens */
+  position: fixed;
+  bottom: 20px;
+  width: 100%;
+  text-align: center;
+  z-index: 20;
+}
+
+#mobile-controls button {
+  background: rgba(255, 255, 255, 0.2);
+  border: 2px solid white;
+  color: white;
+  font-size: 24px;
+  margin: 0 10px;
+  padding: 15px 20px;
+  border-radius: 10px;
+}
+
+@media (max-width: 768px) {
+  #mobile-controls {
+    display: block;
+  }
+}
+
+  </style>
+</head>
+<body>
+  <canvas id="game"></canvas>
+  <div id="mobile-controls">
+  <button id="leftBtn">◀️</button>
+  <button id="fireBtn">🔫</button>
+  <button id="rightBtn">▶️</button>
+</div>
+
+  <div id="hud">
+    ❤️ Health: <span id="health">100</span><br>
+    🧮 Score: <span id="score">0</span>
+  </div>
+
+<script>
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+canvas.width = window.innerWidth;
+canvas.height = window.innerHeight;
+
+const fireSound = new Audio('auto-gun-shots-312660.mp3');
+fireSound.volume = 0.5;
+fireSound.loop = true;
+
+let keys = {};
+let bullets = [];
+let enemies = [];
+let enemyBullets = [];
+let particles = [];
+let explosions = [];
+
+let score = 0;
+let health = 100;
+let gameOver = false;
+let isFiring = false;
+let fireCooldown = 0;
+let enemySpawnTimer = 0;
+
+// Player
+const player = {
+  x: canvas.width / 2,
+  y: canvas.height - 100,
+  width: 40,
+  height: 60,
+  speed: 5,
+  draw() {
+    ctx.fillStyle = "yellow";
+    ctx.fillRect(this.x, this.y, this.width, this.height);
+    ctx.fillStyle = "black";
+    ctx.fillRect(this.x + 10, this.y + 15, 20, 30);
+  },
+};
+
+// Enemy drawing
+function drawEnemy(enemy) {
+  ctx.fillStyle = "red";
+  ctx.fillRect(enemy.x, enemy.y, enemy.width, enemy.height);
+  ctx.fillStyle = "black";
+  ctx.fillRect(enemy.x + 10, enemy.y + 10, 20, 20);
+}
+
+function createEnemy() {
+  let x = Math.random() * (canvas.width - 40);
+  enemies.push({
+    x,
+    y: -60,
+    width: 40,
+    height: 60,
+    speed: 1 + Math.random(),
+    shootCooldown: 100 + Math.random() * 100,
+  });
+}
+
+// Explosion class
+class Explosion {
+  constructor(x, y) {
+    this.x = x - 64; // Center the explosion (assuming image is 128x128)
+    this.y = y - 64;
+    this.frame = 0;
+    this.frameCount = 5; // Number of frames in your explosion sprite sheet
+    this.frameWidth = 128; // Adjust based on your image dimensions
+    this.frameHeight = 128;
+    this.animationSpeed = 8; // Higher = slower animation (increased from 5 to 8)
+    this.timer = 0;
+    this.markedForDeletion = false;
+    this.image = new Image();
+    this.image.src = 'boom5.png'; // Your explosion sprite sheet
+    
+    // Scale factor to make explosion bigger
+    this.scale = 1.5;
+  }
+
+  update() {
+    this.timer++;
+    if (this.timer % this.animationSpeed === 0) {
+      this.frame++;
+      if (this.frame >= this.frameCount) {
+        this.markedForDeletion = true;
+      }
+    }
+  }
+
+  draw() {
+    if (this.image.complete) {
+      ctx.drawImage(
+        this.image,
+        this.frame * this.frameWidth, 0,
+        this.frameWidth, this.frameHeight,
+        this.x, this.y,
+        this.frameWidth * this.scale, this.frameHeight * this.scale
+      );
+    } else {
+      // Fallback rectangle if image hasn't loaded
+      ctx.fillStyle = 'orange';
+      ctx.beginPath();
+      ctx.arc(this.x + 64, this.y + 64, 30 * (this.frame/this.frameCount), 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+}
+
+function createExplosion(x, y) {
+  explosions.push(new Explosion(x, y));
+}
+
+// Particle system (optional)
+function updateParticles() {
+  particles = particles.filter(p => p.life > 0);
+  particles.forEach(p => {
+    p.x += p.dx;
+    p.y += p.dy;
+    p.life--;
+    ctx.fillStyle = "red";
+    ctx.fillRect(p.x, p.y, 4, 4);
+  });
+}
+
+function drawBullets() {
+  ctx.fillStyle = "white";
+  bullets.forEach(b => {
+    b.y -= 10;
+    ctx.fillRect(b.x, b.y, 4, 10);
+  });
+  bullets = bullets.filter(b => b.y > 0);
+}
+
+function drawEnemyBullets() {
+  ctx.fillStyle = "orange";
+  enemyBullets.forEach(b => {
+    b.y += 5;
+    ctx.fillRect(b.x, b.y, 4, 10);
+    if (
+      b.x > player.x &&
+      b.x < player.x + player.width &&
+      b.y > player.y &&
+      b.y < player.y + player.height
+    ) {
+      health -= 10;
+      b.y = canvas.height + 100;
+      if (health <= 0) gameOver = true;
+    }
+  });
+  enemyBullets = enemyBullets.filter(b => b.y < canvas.height);
+}
+
+function drawEnemies() {
+  enemies.forEach(e => {
+    e.y += e.speed;
+    drawEnemy(e);
+
+    e.shootCooldown--;
+    if (e.shootCooldown <= 0) {
+      enemyBullets.push({ x: e.x + 18, y: e.y + 60 });
+      e.shootCooldown = 100 + Math.random() * 100;
+    }
+
+    if (
+      e.x < player.x + player.width &&
+      e.x + e.width > player.x &&
+      e.y < player.y + player.height &&
+      e.y + e.height > player.y
+    ) {
+      health = 0;
+      gameOver = true;
+    }
+  });
+
+  enemies = enemies.filter(e => e.y < canvas.height);
+}
+
+function checkCollisions() {
+  bullets.forEach(b => {
+    enemies.forEach((e, i) => {
+      if (
+        b.x > e.x &&
+        b.x < e.x + e.width &&
+        b.y > e.y &&
+        b.y < e.y + e.height
+      ) {
+        bullets = bullets.filter(bb => bb !== b);
+        enemies.splice(i, 1);
+        score += 10;
+        createExplosion(e.x + 20, e.y + 30);
+      }
+    });
+  });
+}
+
+function drawHUD() {
+  document.getElementById("health").textContent = health;
+  document.getElementById("score").textContent = score;
+}
+
+function update() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  if (gameOver) {
+    ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "white";
+    ctx.font = "48px sans-serif";
+    ctx.fillText("GAME OVER", canvas.width / 2 - 140, canvas.height / 2);
+    ctx.font = "24px sans-serif";
+    ctx.fillText("Reload to try again", canvas.width / 2 - 100, canvas.height / 2 + 40);
+    fireSound.pause();
+    return;
+  }
+
+  // Enemy spawning with timer control
+  enemySpawnTimer++;
+  if (enemySpawnTimer > 60 && Math.random() < 0.02) {
+    createEnemy();
+    enemySpawnTimer = 0;
+  }
+
+  if (keys["ArrowLeft"] && player.x > 0) player.x -= player.speed;
+  if (keys["ArrowRight"] && player.x < canvas.width - player.width) player.x += player.speed;
+
+  if (isFiring && fireCooldown <= 0) {
+    bullets.push({ x: player.x + 18, y: player.y });
+    fireCooldown = 10;
+  }
+
+  if (fireCooldown > 0) fireCooldown--;
+
+  player.draw();
+  drawBullets();
+  drawEnemyBullets();
+  drawEnemies();
+  checkCollisions();
+  updateParticles();
+
+  // Update and draw explosions
+  explosions.forEach(ex => {
+    ex.update();
+    ex.draw();
+  });
+  explosions = explosions.filter(ex => !ex.markedForDeletion);
+
+  drawHUD();
+  requestAnimationFrame(update);
+}
+
+// Controls
+window.addEventListener("keydown", e => {
+  keys[e.key] = true;
+  if (e.code === "Space") {
+    isFiring = true;
+    fireSound.currentTime = 0;
+    fireSound.play().catch(() => {});
+  }
+});
+
+window.addEventListener("keyup", e => {
+  keys[e.key] = false;
+  if (e.code === "Space") {
+    isFiring = false;
+    fireSound.pause();
+    fireSound.currentTime = 0;
+  }
+});
+
+// Handle window resize
+window.addEventListener("resize", () => {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+  player.y = canvas.height - 100;
+});
+
+// Preload explosion image
+const preloadImage = new Image();
+preloadImage.src = 'boom5.png';
+
+update();
+
+
+
+
+
+
+// Mobile Button Controls
+document.getElementById("leftBtn").addEventListener("touchstart", () => keys["ArrowLeft"] = true);
+document.getElementById("leftBtn").addEventListener("touchend", () => keys["ArrowLeft"] = false);
+
+document.getElementById("rightBtn").addEventListener("touchstart", () => keys["ArrowRight"] = true);
+document.getElementById("rightBtn").addEventListener("touchend", () => keys["ArrowRight"] = false);
+
+document.getElementById("fireBtn").addEventListener("touchstart", () => {
+  isFiring = true;
+  fireSound.currentTime = 0;
+  fireSound.play().catch(() => {});
+});
+document.getElementById("fireBtn").addEventListener("touchend", () => {
+  isFiring = false;
+  fireSound.pause();
+  fireSound.currentTime = 0;
+});
+
+
+</script>
+</body>
+</html>
